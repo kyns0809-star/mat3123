@@ -78,3 +78,143 @@ R² Score: 모델이 데이터 분산을 얼마나 잘 설명하는지 나타내
 
 본 프로젝트는 비교적 단순한 데이터 구조를 활용하면서도, 딥러닝 모델을 적용하여 실제 문제 해결에 머신러닝을 활용하는 전체 과정을 경험할 수 있는 예제이다.
 이를 통해 데이터 전처리, 모델 설계, 학습, 평가까지의 흐름을 종합적으로 이해할 수 있다.
+
+import numpy as np
+import pandas as pd
+
+from sklearn.model_selection import train_test_split
+from sklearn.preprocessing import StandardScaler
+from sklearn.metrics import mean_absolute_error, mean_squared_error, r2_score
+
+import tensorflow as tf
+from tensorflow import keras
+from tensorflow.keras import layers
+
+# =========================
+# 1) (예시) 데이터 생성
+# =========================
+def make_fake_data(n=2000, seed=42):
+    rng = np.random.default_rng(seed)
+
+    study_hours = rng.uniform(0, 25, size=n)          # 공부 시간 (0~25시간/주)
+    attendance  = rng.uniform(50, 100, size=n)        # 출석률 (50~100%)
+    sleep_hours = rng.uniform(3, 9, size=n)           # 평균 수면 (3~9시간/일)
+    prev_score  = rng.uniform(0, 100, size=n)         # 이전 시험 점수
+    tutoring    = rng.integers(0, 2, size=n)          # 과외 여부(0/1)
+    stress      = rng.uniform(0, 10, size=n)          # 스트레스(0~10)
+
+    # 점수 생성 (현실적으로 보이도록 가중치 + 노이즈)
+    noise = rng.normal(0, 6, size=n)
+    score = (
+        2.2 * study_hours
+        + 0.35 * attendance
+        + 1.5 * sleep_hours
+        + 0.45 * prev_score
+        + 4.0 * tutoring
+        - 1.2 * stress
+        + noise
+    )
+
+    # 0~100으로 클립
+    score = np.clip(score, 0, 100)
+
+    df = pd.DataFrame({
+        "study_hours": study_hours,
+        "attendance": attendance,
+        "sleep_hours": sleep_hours,
+        "prev_score": prev_score,
+        "tutoring": tutoring,
+        "stress": stress,
+        "score": score
+    })
+    return df
+
+df = make_fake_data(n=2500)
+print(df.head())
+
+# =========================
+# 2) 학습/테스트 분리
+# =========================
+X = df.drop(columns=["score"]).values
+y = df["score"].values
+
+X_train, X_test, y_train, y_test = train_test_split(
+    X, y, test_size=0.2, random_state=42
+)
+
+# =========================
+# 3) 스케일링 (딥러닝에 중요)
+# =========================
+scaler = StandardScaler()
+X_train_scaled = scaler.fit_transform(X_train)
+X_test_scaled  = scaler.transform(X_test)
+
+# =========================
+# 4) 딥러닝 모델 구성 (회귀)
+# =========================
+model = keras.Sequential([
+    layers.Input(shape=(X_train_scaled.shape[1],)),
+    layers.Dense(64, activation="relu"),
+    layers.Dropout(0.15),
+    layers.Dense(64, activation="relu"),
+    layers.Dropout(0.15),
+    layers.Dense(1)  # 회귀: 마지막은 활성화 없음(선형)
+])
+
+model.compile(
+    optimizer=keras.optimizers.Adam(learning_rate=1e-3),
+    loss="mse",
+    metrics=["mae"]
+)
+
+# =========================
+# 5) 학습 (조기 종료)
+# =========================
+early_stop = keras.callbacks.EarlyStopping(
+    monitor="val_loss",
+    patience=15,
+    restore_best_weights=True
+)
+
+history = model.fit(
+    X_train_scaled, y_train,
+    validation_split=0.2,
+    epochs=300,
+    batch_size=32,
+    callbacks=[early_stop],
+    verbose=1
+)
+
+# =========================
+# 6) 평가
+# =========================
+pred = model.predict(X_test_scaled).flatten()
+
+mae = mean_absolute_error(y_test, pred)
+rmse = np.sqrt(mean_squared_error(y_test, pred))
+r2 = r2_score(y_test, pred)
+
+print("\n=== Test Evaluation ===")
+print(f"MAE  : {mae:.3f}")
+print(f"RMSE : {rmse:.3f}")
+print(f"R^2  : {r2:.3f}")
+
+# =========================
+# 7) 새 입력 예측 함수
+# =========================
+def predict_score(study_hours, attendance, sleep_hours, prev_score, tutoring, stress):
+    x = np.array([[study_hours, attendance, sleep_hours, prev_score, tutoring, stress]], dtype=float)
+    x_scaled = scaler.transform(x)
+    y_pred = model.predict(x_scaled).item()
+    return float(np.clip(y_pred, 0, 100))
+
+# 예시 예측
+example = predict_score(
+    study_hours=12,
+    attendance=95,
+    sleep_hours=7,
+    prev_score=78,
+    tutoring=1,
+    stress=4
+)
+print(f"\n예측 점수: {example:.2f}")
